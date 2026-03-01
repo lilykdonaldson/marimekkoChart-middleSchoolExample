@@ -1,0 +1,325 @@
+<!-- Created with ChatGPT 5.2 -->
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>School Lunch Preferences — Marimekko Chart</title>
+  <style>
+    body { font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; margin: 24px; color:#111; }
+    h1 { font-size: 1.35rem; margin: 0 0 6px; }
+    .sub { color:#444; margin: 0 0 16px; }
+    .wrap { display: grid; grid-template-columns: 1fr; gap: 12px; max-width: 1100px; }
+    .card { border: 1px solid #ddd; border-radius: 12px; padding: 14px; }
+    #chart { width: 100%; height: 520px; display: block; }
+    .legend { display:flex; flex-wrap: wrap; gap: 10px 14px; margin-top: 10px; }
+    .legend-item { display:flex; align-items:center; gap:8px; font-size: 0.95rem; }
+    .swatch { width: 14px; height: 14px; border-radius: 4px; border: 1px solid rgba(0,0,0,.15); }
+    .controls { display:flex; flex-wrap:wrap; gap:10px; align-items:center; }
+    button { border:1px solid #ccc; background:#f7f7f7; border-radius:10px; padding:8px 10px; cursor:pointer; }
+    button:hover { background:#eee; }
+    .tip {
+      position: fixed;
+      pointer-events: none;
+      background: rgba(20,20,20,0.95);
+      color: #fff;
+      padding: 10px 12px;
+      border-radius: 10px;
+      font-size: 13px;
+      line-height: 1.25;
+      max-width: 260px;
+      transform: translate(-50%, -110%);
+      display: none;
+      z-index: 9999;
+      box-shadow: 0 10px 24px rgba(0,0,0,.25);
+    }
+    .axis-label { fill:#222; font-size: 12px; }
+    .grade-label { fill:#222; font-size: 12px; }
+    .small-note { color:#555; font-size: 0.95rem; margin-top: 10px; }
+    .divider { height: 1px; background:#eee; margin: 12px 0; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div>
+      <h1>School Lunch Preferences by Grade</h1>
+      <p class="sub">Interactive Marimekko (mosaic) chart: column width = total students in grade; rectangle area = number of students.</p>
+    </div>
+
+    <div class="card">
+      <div class="controls">
+        <button id="shuffleBtn" title="Randomize the example data a little (for demos)">Shuffle demo data</button>
+        <button id="resetBtn" title="Reset to original example data">Reset data</button>
+      </div>
+      <div class="divider"></div>
+
+      <svg id="chart" viewBox="0 0 1000 520" role="img" aria-label="Marimekko chart"></svg>
+
+      <div id="legend" class="legend"></div>
+      <div class="small-note">
+        Teaching tip: ask students whether a tall rectangle always means “more” (it doesn’t — <b>area</b> matters!).
+      </div>
+    </div>
+  </div>
+
+  <div id="tooltip" class="tip"></div>
+
+<script>
+/**
+ * EDIT YOUR DATA HERE.
+ * Each grade object has counts for each lunch category.
+ */
+const ORIGINAL_DATA = [
+  { grade: "6", "Pizza": 14, "Sandwich": 7, "Salad": 3, "Bring Lunch": 7 },
+  { grade: "7", "Pizza": 6, "Sandwich": 6, "Salad": 5, "Bring Lunch": 8 },
+  { grade: "8", "Pizza":  9, "Sandwich": 10, "Salad": 4, "Bring Lunch":13 },
+];
+
+let DATA = deepCopy(ORIGINAL_DATA);
+
+const COLORS = {
+  "Pizza": "#4C78A8",
+  "Sandwich": "#F58518",
+  "Salad": "#54A24B",
+  "Bring Lunch": "#E45756",
+  // add more categories here if you add them to data
+};
+
+const svg = document.getElementById("chart");
+const legend = document.getElementById("legend");
+const tip = document.getElementById("tooltip");
+
+const PAD = { left: 60, right: 220, top: 30, bottom: 70 }; // in SVG units (viewBox coords)
+const CHART_W = 1000 - PAD.left - PAD.right;
+const CHART_H = 520 - PAD.top - PAD.bottom;
+
+function deepCopy(x) {
+  return JSON.parse(JSON.stringify(x));
+}
+
+function getCategories(data) {
+  const keys = new Set();
+  data.forEach(row => {
+    Object.keys(row).forEach(k => { if (k !== "grade") keys.add(k); });
+  });
+  return Array.from(keys);
+}
+
+function totalsForGrade(row, cats) {
+  return cats.reduce((s, c) => s + (Number(row[c]) || 0), 0);
+}
+
+function sumAll(data, cats) {
+  return data.reduce((s, row) => s + totalsForGrade(row, cats), 0);
+}
+
+function clearSVG() {
+  while (svg.firstChild) svg.removeChild(svg.firstChild);
+}
+
+function makeEl(name, attrs = {}) {
+  const el = document.createElementNS("http://www.w3.org/2000/svg", name);
+  for (const [k, v] of Object.entries(attrs)) el.setAttribute(k, v);
+  return el;
+}
+
+function pct(n, d) {
+  if (!d) return "0%";
+  return (100 * n / d).toFixed(1) + "%";
+}
+
+function renderLegend(categories) {
+  legend.innerHTML = "";
+  categories.forEach(cat => {
+    const item = document.createElement("div");
+    item.className = "legend-item";
+    const sw = document.createElement("div");
+    sw.className = "swatch";
+    sw.style.background = COLORS[cat] || "#999";
+    const label = document.createElement("div");
+    label.textContent = cat;
+    item.appendChild(sw);
+    item.appendChild(label);
+    legend.appendChild(item);
+  });
+}
+
+function showTip(evt, html) {
+  tip.innerHTML = html;
+  tip.style.display = "block";
+  tip.style.left = evt.clientX + "px";
+  tip.style.top = evt.clientY + "px";
+}
+
+function moveTip(evt) {
+  tip.style.left = evt.clientX + "px";
+  tip.style.top = evt.clientY + "px";
+}
+
+function hideTip() {
+  tip.style.display = "none";
+}
+
+function render() {
+  clearSVG();
+
+  const categories = getCategories(DATA);
+
+  // Ensure colors exist for categories (fallback if missing)
+  categories.forEach((c, i) => {
+    if (!COLORS[c]) COLORS[c] = ["#4C78A8","#F58518","#54A24B","#E45756","#72B7B2","#EECA3B","#B279A2","#FF9DA6"][i % 8];
+  });
+
+  renderLegend(categories);
+
+  // Chart frame group
+  const g = makeEl("g", { transform: `translate(${PAD.left},${PAD.top})` });
+  svg.appendChild(g);
+
+  // Compute totals
+  const grandTotal = sumAll(DATA, categories);
+
+  // Draw axes box (simple border)
+  g.appendChild(makeEl("rect", {
+    x: 0, y: 0, width: CHART_W, height: CHART_H,
+    fill: "none", stroke: "#ccc"
+  }));
+
+  // Title inside svg (optional)
+  g.appendChild(makeEl("text", {
+    x: 0, y: -10, class: "axis-label"
+  })).textContent = "Marimekko Chart";
+
+  // Draw columns
+  let x = 0;
+  DATA.forEach(row => {
+    const gradeTotal = totalsForGrade(row, categories);
+    const colW = grandTotal ? (CHART_W * gradeTotal / grandTotal) : 0;
+
+    // stack from bottom up
+    let y = CHART_H;
+    categories.forEach(cat => {
+      const v = Number(row[cat]) || 0;
+      const h = gradeTotal ? (CHART_H * v / gradeTotal) : 0;
+      y -= h;
+
+      const rect = makeEl("rect", {
+        x: x, y: y, width: colW, height: h,
+        fill: COLORS[cat],
+        stroke: "white",
+        "stroke-width": 2,
+        cursor: "pointer",
+        "data-grade": row.grade,
+        "data-cat": cat,
+        "data-count": v,
+        "data-grade-total": gradeTotal,
+        "data-grand-total": grandTotal
+      });
+
+      rect.addEventListener("mousemove", (evt) => {
+        const grade = rect.getAttribute("data-grade");
+        const catName = rect.getAttribute("data-cat");
+        const count = Number(rect.getAttribute("data-count"));
+        const gTot = Number(rect.getAttribute("data-grade-total"));
+        const bigTot = Number(rect.getAttribute("data-grand-total"));
+
+        showTip(evt, `
+          <div style="font-weight:700;margin-bottom:4px;">Grade ${grade} — ${catName}</div>
+          <div><b>Count:</b> ${count}</div>
+          <div><b>% of grade:</b> ${pct(count, gTot)}</div>
+          <div><b>% of all students:</b> ${pct(count, bigTot)}</div>
+          <div style="opacity:.85;margin-top:6px;"><b>Grade total:</b> ${gTot}</div>
+        `);
+      });
+      rect.addEventListener("mouseenter", () => {
+        rect.setAttribute("opacity", "0.9");
+      });
+      rect.addEventListener("mouseleave", () => {
+        rect.setAttribute("opacity", "1");
+        hideTip();
+      });
+      rect.addEventListener("mousemove", moveTip);
+
+      g.appendChild(rect);
+
+      // label if rectangle is big enough
+      if (colW * h > 12000) { // threshold in SVG area units
+        const label = makeEl("text", {
+          x: x + colW / 2,
+          y: y + h / 2,
+          "text-anchor": "middle",
+          "dominant-baseline": "middle",
+          fill: "white",
+          style: "font-size:12px;font-weight:600;pointer-events:none;"
+        });
+        label.textContent = `${cat} (${v})`;
+        g.appendChild(label);
+      }
+    });
+
+    // Grade label under each column
+    const label = makeEl("text", {
+      x: x + colW / 2,
+      y: CHART_H + 28,
+      "text-anchor": "middle",
+      class: "grade-label"
+    });
+    label.textContent = `Grade ${row.grade} (n=${gradeTotal})`;
+    g.appendChild(label);
+
+    x += colW;
+  });
+
+  // Y-axis hint label (conceptual)
+  const yLabel = makeEl("text", {
+    x: -42,
+    y: CHART_H / 2,
+    transform: `rotate(-90, -42, ${CHART_H / 2})`,
+    class: "axis-label"
+  });
+  yLabel.textContent = "Within-grade share";
+  g.appendChild(yLabel);
+
+  // X-axis hint label
+  const xLabel = makeEl("text", {
+    x: CHART_W / 2,
+    y: CHART_H + 55,
+    "text-anchor": "middle",
+    class: "axis-label"
+  });
+  xLabel.textContent = "Grade (column width = grade total)";
+  g.appendChild(xLabel);
+}
+
+function jitterCounts(data) {
+  // small random +/- tweak for demo
+  const categories = getCategories(data);
+  return data.map(row => {
+    const r = { grade: row.grade };
+    categories.forEach(c => {
+      const base = Number(row[c]) || 0;
+      const delta = Math.floor((Math.random() * 5) - 2); // -2..+2
+      r[c] = Math.max(0, base + delta);
+    });
+    return r;
+  });
+}
+
+document.getElementById("shuffleBtn").addEventListener("click", () => {
+  DATA = jitterCounts(DATA);
+  render();
+});
+
+document.getElementById("resetBtn").addEventListener("click", () => {
+  DATA = deepCopy(ORIGINAL_DATA);
+  render();
+});
+
+window.addEventListener("resize", () => {
+  // SVG is responsive via CSS; viewBox stays constant, so no redraw needed.
+});
+
+render();
+</script>
+</body>
+</html>
